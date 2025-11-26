@@ -17,6 +17,3 @@ A CRUD web application using **JSP + JDBC + MySQL** to manage hostel room alloca
 2. Add MySQL Connector JAR in /lib
 3. Create DB using `sql/hostel_db.sql`
 4. Deploy on Tomcat 10
-
-## Folder Structure
-(Explain the structure like above)
