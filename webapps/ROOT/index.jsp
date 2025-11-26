@@ -1,19 +1,19 @@
+<%@ page import="java.sql.*" %>
 <%@ page import="java.util.*" %>
 <%@ page contentType="text/html;charset=UTF-8" language="java" %>
 
 <%!
-    // --- 1. DATA MODELS (Classes) ---
+    // --- 1. DATA CLASSES ---
     public static class Room {
         String id;
         String number;
         int capacity;
         int currentOccupancy;
-
-        public Room(String id, String number, int capacity) {
+        public Room(String id, String number, int capacity, int currentOccupancy) {
             this.id = id;
             this.number = number;
             this.capacity = capacity;
-            this.currentOccupancy = 0;
+            this.currentOccupancy = currentOccupancy;
         }
     }
 
@@ -21,293 +21,252 @@
         String id;
         String name;
         String gender;
-        String assignedRoomId; // Null if not allocated
-
-        public Student(String id, String name, String gender) {
+        String assignedRoomId;
+        public Student(String id, String name, String gender, String assignedRoomId) {
             this.id = id;
             this.name = name;
             this.gender = gender;
-            this.assignedRoomId = null;
+            this.assignedRoomId = assignedRoomId;
         }
-    }
-
-    // --- 2. HELPER METHODS ---
-    public Room findRoom(List<Room> rooms, String id) {
-        if(rooms == null) return null;
-        for(Room r : rooms) if(r.id.equals(id)) return r;
-        return null;
-    }
-
-    public Student findStudent(List<Student> students, String id) {
-        if(students == null) return null;
-        for(Student s : students) if(s.id.equals(id)) return s;
-        return null;
     }
 %>
 
 <%
-    // --- 3. INITIALIZATION (Application Scope acts as Database) ---
-    List<Room> rooms = (List<Room>) application.getAttribute("rooms");
-    List<Student> students = (List<Student>) application.getAttribute("students");
+    // --- 2. DATABASE CONFIGURATION (Matching your working script) ---
+    String DB_URL = "jdbc:mysql://localhost:3306/test";
+    String DB_USER = "jspuser";     // <--- Updated to match your working script
+    String DB_PASS = "mypassword";  // <--- Updated to match your working script
+    
+    Connection conn = null;
     String message = "";
-    String msgType = ""; // "success" or "error"
+    String msgType = "";
 
-    if (rooms == null) {
-        rooms = new ArrayList<>();
-        rooms.add(new Room("101", "101-A", 2));
-        rooms.add(new Room("102", "102-B", 4));
-        rooms.add(new Room("103", "VIP-1", 1));
-        application.setAttribute("rooms", rooms);
-    }
-    if (students == null) {
-        students = new ArrayList<>();
-        students.add(new Student("s1", "John Doe", "Male"));
-        students.add(new Student("s2", "Jane Smith", "Female"));
-        students.add(new Student("s3", "Alice Johnson", "Female"));
-        application.setAttribute("students", students);
+    try {
+        Class.forName("com.mysql.cj.jdbc.Driver");
+        conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASS);
+    } catch (Exception e) {
+        message = "DB Connection Failed: " + e.getMessage();
+        msgType = "error";
     }
 
-    // --- 4. ACTION HANDLING (Controller Logic) ---
-    String action = request.getParameter("action");
-
-    if ("addStudent".equals(action)) {
-        String name = request.getParameter("name");
-        String gender = request.getParameter("gender");
-        if (name != null && !name.isEmpty()) {
-            students.add(new Student(UUID.randomUUID().toString(), name, gender));
-            message = "Student added successfully.";
-            msgType = "success";
+    // --- 3. AUTO-CREATE TABLES (Run Once) ---
+    if (conn != null) {
+        try {
+            Statement stmt = conn.createStatement();
+            stmt.executeUpdate("CREATE TABLE IF NOT EXISTS rooms (id VARCHAR(50) PRIMARY KEY, room_number VARCHAR(50), capacity INT)");
+            stmt.executeUpdate("CREATE TABLE IF NOT EXISTS students (id VARCHAR(50) PRIMARY KEY, name VARCHAR(100), gender VARCHAR(20), assigned_room_id VARCHAR(50))");
+            stmt.close();
+        } catch (SQLException e) {
+            message = "Table Init Error: " + e.getMessage();
+            msgType = "error";
         }
-    } else if ("addRoom".equals(action)) {
-        String num = request.getParameter("number");
-        int cap = Integer.parseInt(request.getParameter("capacity"));
-        rooms.add(new Room(UUID.randomUUID().toString(), num, cap));
-        message = "Room added successfully.";
-        msgType = "success";
-    } else if ("allocate".equals(action)) {
-        String sId = request.getParameter("studentId");
-        String rId = request.getParameter("roomId");
-        Student s = findStudent(students, sId);
-        Room r = findRoom(rooms, rId);
+    }
 
-        if (s != null && r != null) {
-            if (s.assignedRoomId != null) {
-                message = "Error: Student already has a room.";
-                msgType = "error";
-            } else if (r.currentOccupancy >= r.capacity) {
-                message = "Error: Room is full.";
-                msgType = "error";
-            } else {
-                s.assignedRoomId = r.id;
-                r.currentOccupancy++;
-                message = "Allocated " + s.name + " to Room " + r.number;
+    // --- 4. ACTION CONTROLLER ---
+    String action = request.getParameter("action");
+    if (conn != null && action != null) {
+        try {
+            if ("addStudent".equals(action)) {
+                String name = request.getParameter("name");
+                String gender = request.getParameter("gender");
+                PreparedStatement ps = conn.prepareStatement("INSERT INTO students (id, name, gender) VALUES (?, ?, ?)");
+                ps.setString(1, UUID.randomUUID().toString());
+                ps.setString(2, name);
+                ps.setString(3, gender);
+                ps.executeUpdate();
+                message = "Student added!";
+                msgType = "success";
+
+            } else if ("addRoom".equals(action)) {
+                String num = request.getParameter("number");
+                int cap = Integer.parseInt(request.getParameter("capacity"));
+                PreparedStatement ps = conn.prepareStatement("INSERT INTO rooms (id, room_number, capacity) VALUES (?, ?, ?)");
+                ps.setString(1, UUID.randomUUID().toString());
+                ps.setString(2, num);
+                ps.setInt(3, cap);
+                ps.executeUpdate();
+                message = "Room added!";
+                msgType = "success";
+
+            } else if ("allocate".equals(action)) {
+                String sId = request.getParameter("studentId");
+                String rId = request.getParameter("roomId");
+                // Check capacity
+                PreparedStatement checkPs = conn.prepareStatement("SELECT capacity, (SELECT COUNT(*) FROM students WHERE assigned_room_id = rooms.id) as occ FROM rooms WHERE id = ?");
+                checkPs.setString(1, rId);
+                ResultSet rs = checkPs.executeQuery();
+                if (rs.next()) {
+                    if (rs.getInt("occ") >= rs.getInt("capacity")) {
+                        message = "Room is full!";
+                        msgType = "error";
+                    } else {
+                        PreparedStatement up = conn.prepareStatement("UPDATE students SET assigned_room_id = ? WHERE id = ?");
+                        up.setString(1, rId);
+                        up.setString(2, sId);
+                        up.executeUpdate();
+                        message = "Allocated!";
+                        msgType = "success";
+                    }
+                }
+                rs.close();
+
+            } else if ("deallocate".equals(action)) {
+                String sId = request.getParameter("studentId");
+                PreparedStatement ps = conn.prepareStatement("UPDATE students SET assigned_room_id = NULL WHERE id = ?");
+                ps.setString(1, sId);
+                ps.executeUpdate();
+                message = "De-allocated!";
                 msgType = "success";
             }
+        } catch (Exception e) {
+            message = "Action Error: " + e.getMessage();
+            msgType = "error";
         }
-    } else if ("deallocate".equals(action)) {
-        String sId = request.getParameter("studentId");
-        Student s = findStudent(students, sId);
-        if (s != null && s.assignedRoomId != null) {
-            Room r = findRoom(rooms, s.assignedRoomId);
-            if (r != null) r.currentOccupancy--;
-            s.assignedRoomId = null;
-            message = "De-allocated successfully.";
-            msgType = "success";
-        }
+    }
+
+    // --- 5. FETCH DATA FOR UI ---
+    List<Room> rooms = new ArrayList<>();
+    List<Student> students = new ArrayList<>();
+
+    if (conn != null) {
+        try {
+            Statement s1 = conn.createStatement();
+            ResultSet r1 = s1.executeQuery("SELECT id, room_number, capacity, (SELECT COUNT(*) FROM students WHERE assigned_room_id = rooms.id) as occ FROM rooms ORDER BY room_number");
+            while(r1.next()) {
+                rooms.add(new Room(r1.getString("id"), r1.getString("room_number"), r1.getInt("capacity"), r1.getInt("occ")));
+            }
+            
+            Statement s2 = conn.createStatement();
+            ResultSet r2 = s2.executeQuery("SELECT * FROM students ORDER BY name");
+            while(r2.next()) {
+                students.add(new Student(r2.getString("id"), r2.getString("name"), r2.getString("gender"), r2.getString("assigned_room_id")));
+            }
+            conn.close(); // Close connection
+        } catch(Exception e) { out.println("Fetch Error: " + e); }
     }
 %>
 
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Dorm Manager Pro</title>
+    <title>Hostel Manager (JDBC)</title>
     <style>
-        /* Minimal Aesthetic Art Styles */
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; color: #333; }
-        
-        .container {
-            max-width: 1000px; margin: auto; background: white;
-            border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: hidden;
-        }
-
-        .header { background: #007bff; color: white; padding: 20px; text-align: center; }
-        .header h1 { margin: 0; font-weight: 300; letter-spacing: 1px; }
-
-        .content { padding: 30px; }
-
-        .alert {
-            padding: 15px; margin-bottom: 20px; border-radius: 6px; font-size: 14px;
-        }
-        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-
-        /* Grid Layout for Forms */
-        .grid-row { display: flex; gap: 20px; margin-bottom: 30px; }
-        .card { flex: 1; background: #fafafa; padding: 20px; border-radius: 8px; border: 1px solid #eee; }
-        .card h3 { margin-top: 0; color: #555; border-bottom: 2px solid #ddd; padding-bottom: 10px; font-size: 16px; }
-
-        /* Form Elements */
-        form { display: flex; flex-direction: column; gap: 10px; }
-        input, select { padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
-        button {
-            padding: 10px; border: none; border-radius: 4px; cursor: pointer;
-            background: #007bff; color: white; font-weight: bold; transition: 0.2s;
-        }
+        body { font-family: sans-serif; background: #f4f4f9; padding: 20px; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #333; }
+        .alert { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .forms { display: flex; gap: 20px; flex-wrap: wrap; }
+        .card { flex: 1; background: #fafafa; padding: 15px; border: 1px solid #ddd; border-radius: 6px; min-width: 250px; }
+        input, select, button { width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; cursor: pointer; margin-top: 10px; }
         button:hover { background: #0056b3; }
-        button.danger { background: #dc3545; }
-        button.danger:hover { background: #a71d2a; }
-
-        /* Tables */
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
-        th, td { padding: 12px 15px; border-bottom: 1px solid #eee; text-align: left; }
-        th { background: #f8f9fa; color: #666; font-weight: 600; }
-        tr:hover { background: #f1f1f1; }
-        
-        .badge { padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; }
-        .badge-avail { background: #d4edda; color: #155724; }
-        .badge-full { background: #f8d7da; color: #721c24; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 10px; border-bottom: 1px solid #eee; text-align: left; }
+        th { background: #f1f1f1; }
+        .badge { padding: 3px 8px; border-radius: 10px; font-size: 12px; color: white; }
+        .bg-green { background: #28a745; }
+        .bg-red { background: #dc3545; }
     </style>
 </head>
 <body>
-
 <div class="container">
-    <div class="header">
-        <h1>Hostel Allocation System</h1>
+    <h1>Hostel Allocation System</h1>
+    
+    <% if (!message.isEmpty()) { %>
+        <div class="alert <%= msgType %>"><%= message %></div>
+    <% } %>
+
+    <div class="forms">
+        <div class="card">
+            <h3>Add Student</h3>
+            <form method="post">
+                <input type="hidden" name="action" value="addStudent">
+                <input type="text" name="name" placeholder="Name" required>
+                <select name="gender">
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                </select>
+                <button type="submit">Add Student</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h3>Add Room</h3>
+            <form method="post">
+                <input type="hidden" name="action" value="addRoom">
+                <input type="text" name="number" placeholder="Room No (e.g. 101)" required>
+                <input type="number" name="capacity" placeholder="Capacity" required>
+                <button type="submit" style="background:#28a745">Add Room</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h3>Allocate</h3>
+            <form method="post">
+                <input type="hidden" name="action" value="allocate">
+                <select name="studentId">
+                    <option disabled selected>Select Student...</option>
+                    <% for(Student s : students) { if(s.assignedRoomId == null) { %>
+                        <option value="<%= s.id %>"><%= s.name %></option>
+                    <% }} %>
+                </select>
+                <select name="roomId">
+                    <option disabled selected>Select Room...</option>
+                    <% for(Room r : rooms) { if(r.currentOccupancy < r.capacity) { %>
+                        <option value="<%= r.id %>"><%= r.number %> (Free: <%= r.capacity - r.currentOccupancy %>)</option>
+                    <% }} %>
+                </select>
+                <button type="submit" style="background:#6610f2">Assign</button>
+            </form>
+        </div>
     </div>
 
-    <div class="content">
-        
-        <% if (!message.isEmpty()) { %>
-            <div class="alert <%= msgType %>">
-                <%= message %>
-            </div>
+    <hr>
+
+    <h3>Room Status</h3>
+    <table>
+        <tr><th>Room</th><th>Occupancy</th><th>Status</th></tr>
+        <% for(Room r : rooms) { %>
+        <tr>
+            <td><%= r.number %></td>
+            <td><%= r.currentOccupancy %> / <%= r.capacity %></td>
+            <td>
+                <% if(r.currentOccupancy >= r.capacity) { %>
+                    <span class="badge bg-red">FULL</span>
+                <% } else { %>
+                    <span class="badge bg-green">AVAILABLE</span>
+                <% } %>
+            </td>
+        </tr>
         <% } %>
+    </table>
 
-        <div class="grid-row">
-            <div class="card">
-                <h3>+ Add Student</h3>
-                <form method="post">
-                    <input type="hidden" name="action" value="addStudent">
-                    <input type="text" name="name" placeholder="Student Name" required>
-                    <select name="gender">
-                        <option value="Male">Male</option>
-                        <option value="Female">Female</option>
-                    </select>
-                    <button type="submit">Create Student</button>
+    <h3>Student List</h3>
+    <table>
+        <tr><th>Name</th><th>Room</th><th>Action</th></tr>
+        <% for(Student s : students) { 
+             String rNum = "Unassigned";
+             if(s.assignedRoomId != null) {
+                 for(Room r : rooms) if(r.id.equals(s.assignedRoomId)) rNum = r.number;
+             }
+        %>
+        <tr>
+            <td><%= s.name %></td>
+            <td><b><%= rNum %></b></td>
+            <td>
+                <% if(s.assignedRoomId != null) { %>
+                <form method="post" style="display:inline;">
+                    <input type="hidden" name="action" value="deallocate">
+                    <input type="hidden" name="studentId" value="<%= s.id %>">
+                    <button type="submit" style="background:#dc3545; width:auto; padding:5px 10px; font-size:12px; margin:0;">Vacate</button>
                 </form>
-            </div>
-
-            <div class="card">
-                <h3>+ Add Room</h3>
-                <form method="post">
-                    <input type="hidden" name="action" value="addRoom">
-                    <input type="text" name="number" placeholder="Room Number (e.g. 101-A)" required>
-                    <input type="number" name="capacity" placeholder="Capacity (e.g. 2)" required min="1">
-                    <button type="submit" style="background: #28a745;">Create Room</button>
-                </form>
-            </div>
-            
-            <div class="card">
-                <h3>⚡ Assign Room</h3>
-                <form method="post">
-                    <input type="hidden" name="action" value="allocate">
-                    <select name="studentId" required>
-                        <option value="" disabled selected>Select Student...</option>
-                        <% for(Student s : students) { 
-                             if(s.assignedRoomId == null) { %>
-                                <option value="<%= s.id %>"><%= s.name %></option>
-                        <%   } 
-                           } %>
-                    </select>
-                    <select name="roomId" required>
-                        <option value="" disabled selected>Select Room...</option>
-                        <% for(Room r : rooms) { 
-                             if(r.currentOccupancy < r.capacity) { %>
-                                <option value="<%= r.id %>"><%= r.number %> (Aval: <%= r.capacity - r.currentOccupancy %>)</option>
-                        <%   } 
-                           } %>
-                    </select>
-                    <button type="submit" style="background: #6610f2;">Allocate</button>
-                </form>
-            </div>
-        </div>
-
-        <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
-
-        <div class="grid-row">
-            
-            <div class="card" style="flex: 1;">
-                <h3>🏠 Room Status</h3>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Room No</th>
-                            <th>Cap</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <% for(Room r : rooms) { %>
-                        <tr>
-                            <td><%= r.number %></td>
-                            <td><%= r.currentOccupancy %> / <%= r.capacity %></td>
-                            <td>
-                                <% if(r.currentOccupancy >= r.capacity) { %>
-                                    <span class="badge badge-full">FULL</span>
-                                <% } else { %>
-                                    <span class="badge badge-avail">AVAILABLE</span>
-                                <% } %>
-                            </td>
-                        </tr>
-                        <% } %>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="card" style="flex: 2;">
-                <h3>🎓 Student Roster</h3>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Gender</th>
-                            <th>Assigned Room</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <% for(Student s : students) { 
-                            Room assignedRoom = findRoom(rooms, s.assignedRoomId);
-                        %>
-                        <tr>
-                            <td><%= s.name %></td>
-                            <td><%= s.gender %></td>
-                            <td>
-                                <% if(assignedRoom != null) { %>
-                                    <b><%= assignedRoom.number %></b>
-                                <% } else { %>
-                                    <span style="color: #999;">-- Unassigned --</span>
-                                <% } %>
-                            </td>
-                            <td>
-                                <% if(assignedRoom != null) { %>
-                                    <form method="post" style="margin:0;">
-                                        <input type="hidden" name="action" value="deallocate">
-                                        <input type="hidden" name="studentId" value="<%= s.id %>">
-                                        <button type="submit" class="danger" style="padding: 5px 10px; font-size: 12px;">Vacate</button>
-                                    </form>
-                                <% } %>
-                            </td>
-                        </tr>
-                        <% } %>
-                    </tbody>
-                </table>
-            </div>
-
-        </div>
-
-    </div>
+                <% } %>
+            </td>
+        </tr>
+        <% } %>
+    </table>
 </div>
-
 </body>
 </html>
