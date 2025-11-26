@@ -1,0 +1,20 @@
+# Tomcat & runtime files
+logs/
+temp/
+work/
+bin/
+conf/
+webapps/docs/
+webapps/examples/
+webapps/host-manager/
+webapps/manager/
+
+# Build files
+*.class
+*.war
+*.jar
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
